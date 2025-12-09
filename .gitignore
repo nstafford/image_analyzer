@@ -32,6 +32,7 @@ env/
 *.swp
 *.swo
 *~
+.github/instructions/
 
 # OS
 .DS_Store
