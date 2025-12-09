@@ -69,8 +69,28 @@ class MainWindow:
         right_panel.pack(side=RIGHT, fill=BOTH, padx=(5, 0))
         
         self.metrics_text = ttk.Text(right_panel, width=30, height=20, wrap=WORD)
-        self.metrics_text.pack(fill=BOTH, expand=True)
+        self.metrics_text.pack(fill=BOTH, expand=True, pady=(0, 10))
         self.metrics_text.config(state=DISABLED)
+        
+        # Segmentation results panel
+        seg_results_frame = ttk.Labelframe(right_panel, text="Segmentation Results", padding=10)
+        seg_results_frame.pack(fill=BOTH, expand=True)
+        
+        # Create scrollable frame for segmentation results
+        self.seg_canvas = ttk.Canvas(seg_results_frame, height=200)
+        seg_scrollbar = ttk.Scrollbar(seg_results_frame, orient=VERTICAL, command=self.seg_canvas.yview)
+        self.seg_results_frame_inner = ttk.Frame(self.seg_canvas)
+        
+        self.seg_results_frame_inner.bind(
+            "<Configure>",
+            lambda e: self.seg_canvas.configure(scrollregion=self.seg_canvas.bbox("all"))
+        )
+        
+        self.seg_canvas.create_window((0, 0), window=self.seg_results_frame_inner, anchor="nw")
+        self.seg_canvas.configure(yscrollcommand=seg_scrollbar.set)
+        
+        self.seg_canvas.pack(side=LEFT, fill=BOTH, expand=True)
+        seg_scrollbar.pack(side=RIGHT, fill=Y)
         
         # Status bar
         self.status_bar = ttk.Label(
@@ -153,6 +173,44 @@ class MainWindow:
         self.metrics_text.insert(1.0, metrics_text)
         self.metrics_text.config(state=DISABLED)
     
+    def _display_segmentation_results(self, stats: list):
+        """
+        Display segmentation results with color swatches, labels, and percentages.
+        
+        Args:
+            stats: List of segmentation statistics from model
+        """
+        # Clear previous results
+        for widget in self.seg_results_frame_inner.winfo_children():
+            widget.destroy()
+        
+        if not stats:
+            no_results = ttk.Label(
+                self.seg_results_frame_inner,
+                text="No segmentation results",
+                anchor=CENTER
+            )
+            no_results.pack(pady=20)
+            return
+        
+        # Display each class with color swatch
+        for idx, stat in enumerate(stats):
+            result_frame = ttk.Frame(self.seg_results_frame_inner)
+            result_frame.pack(fill=X, pady=2, padx=5)
+            
+            # Color swatch (20x20 pixel canvas)
+            color_canvas = ttk.Canvas(result_frame, width=20, height=20)
+            color_canvas.pack(side=LEFT, padx=(0, 10))
+            
+            # Convert RGB tuple to hex color
+            color_hex = '#{:02x}{:02x}{:02x}'.format(*stat['color'])
+            color_canvas.create_rectangle(0, 0, 20, 20, fill=color_hex, outline="black")
+            
+            # Class name and percentage
+            label_text = f"{stat['name']}: {stat['percentage']:.1f}%"
+            result_label = ttk.Label(result_frame, text=label_text)
+            result_label.pack(side=LEFT, fill=X, expand=True)
+    
     def run_ml_segmentation(self):
         """Run ML segmentation on the current image."""
         if self.current_image is None:
@@ -201,13 +259,19 @@ class MainWindow:
             
             self.segmented_mask = mask
             
-            # Step 3: Display result
-            self.root.after(0, lambda: self.status_bar.config(text="Step 3: Displaying results..."))
+            # Step 3: Calculate statistics
+            self.root.after(0, lambda: self.status_bar.config(text="Step 3: Calculating statistics..."))
+            
+            stats = self.segmentation_model.get_segmentation_stats(mask)
+            
+            # Step 4: Display results
+            self.root.after(0, lambda: self.status_bar.config(text="Step 4: Displaying results..."))
             
             overlay_image = self.segmentation_model.overlay_mask(self.current_image, mask, alpha=0.6)
             
             # Update display on main thread
             self.root.after(0, lambda: self._display_segmented_image(overlay_image))
+            self.root.after(0, lambda: self._display_segmentation_results(stats))
             self.root.after(0, lambda: self.ml_btn.config(state=NORMAL))
             self.root.after(0, lambda: self.status_bar.config(text="Segmentation complete!"))
             

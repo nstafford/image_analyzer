@@ -187,3 +187,65 @@ class SegmentationModel:
             [0, 64, 128]     # tv/monitor
         ]
         return palette
+    
+    @staticmethod
+    def get_class_names():
+        """Get class names for PASCAL VOC dataset."""
+        return [
+            "background",
+            "aeroplane",
+            "bicycle",
+            "bird",
+            "boat",
+            "bottle",
+            "bus",
+            "car",
+            "cat",
+            "chair",
+            "cow",
+            "dining table",
+            "dog",
+            "horse",
+            "motorbike",
+            "person",
+            "potted plant",
+            "sheep",
+            "sofa",
+            "train",
+            "tv/monitor"
+        ]
+    
+    def get_segmentation_stats(self, mask: np.ndarray) -> list:
+        """
+        Calculate statistics for each class in the segmentation mask.
+        
+        Args:
+            mask: Segmentation mask array
+            
+        Returns:
+            List of dictionaries with class_id, name, color, and percentage
+        """
+        total_pixels = mask.size
+        class_names = self.get_class_names()
+        palette = self._get_pascal_palette()
+        
+        stats = []
+        unique_classes = np.unique(mask)
+        
+        for class_id in unique_classes:
+            class_pixels = np.sum(mask == class_id)
+            percentage = (class_pixels / total_pixels) * 100
+            
+            # Only include classes with > 0.1% coverage
+            if percentage > 0.1:
+                stats.append({
+                    'class_id': int(class_id),
+                    'name': class_names[class_id] if class_id < len(class_names) else f"Class {class_id}",
+                    'color': tuple(palette[class_id]) if class_id < len(palette) else (128, 128, 128),
+                    'percentage': percentage
+                })
+        
+        # Sort by percentage descending
+        stats.sort(key=lambda x: x['percentage'], reverse=True)
+        
+        return stats
