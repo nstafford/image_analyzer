@@ -22,13 +22,20 @@ class MainWindow:
         self.root.title(config.APP_TITLE)
         self.root.geometry(f"{config.APP_WIDTH}x{config.APP_HEIGHT}")
         
+        # Set minimum window size to prevent UI from breaking
+        self.root.minsize(800, 600)
+        
         self.current_image: Optional[Image.Image] = None
         self.current_filepath: str = ""
         self.photo_image: Optional[ImageTk.PhotoImage] = None
         self.segmentation_model: Optional[SegmentationModel] = None
         self.segmented_mask = None
+        self.display_mode: str = "original"  # "original" or "segmented"
         
         self._create_widgets()
+        
+        # Bind window resize event to update image display
+        self.root.bind('<Configure>', self._on_window_resize)
         
     def _create_widgets(self):
         """Create and layout all widgets."""
@@ -64,20 +71,37 @@ class MainWindow:
         self.image_label = ttk.Label(left_panel, text="No image loaded", anchor=CENTER)
         self.image_label.pack(fill=BOTH, expand=True)
         
-        # Right panel - Metrics
+        # Right panel - Metrics (fixed width to prevent disappearing)
         right_panel = ttk.Labelframe(content, text="Image Metrics", padding=10)
         right_panel.pack(side=RIGHT, fill=BOTH, padx=(5, 0))
+        right_panel.pack_propagate(False)  # Prevent shrinking below minimum
+        right_panel.config(width=320)  # Fixed minimum width for readability
         
-        self.metrics_text = ttk.Text(right_panel, width=30, height=20, wrap=WORD)
-        self.metrics_text.pack(fill=BOTH, expand=True, pady=(0, 10))
+        self.metrics_text = ttk.Text(right_panel, width=35, height=8, wrap=WORD)
+        self.metrics_text.pack(fill=X, pady=(0, 10))
         self.metrics_text.config(state=DISABLED)
         
         # Segmentation results panel
         seg_results_frame = ttk.Labelframe(right_panel, text="Segmentation Results", padding=10)
         seg_results_frame.pack(fill=BOTH, expand=True)
         
+        # Overlay toggle checkbox
+        overlay_control_frame = ttk.Frame(seg_results_frame)
+        overlay_control_frame.pack(fill=X, pady=(0, 5))
+        
+        self.show_overlay_var = ttk.BooleanVar(value=True)
+        self.overlay_checkbox = ttk.Checkbutton(
+            overlay_control_frame,
+            text="Show Overlay",
+            variable=self.show_overlay_var,
+            command=self._toggle_overlay,
+            bootstyle="round-toggle"
+        )
+        self.overlay_checkbox.pack(side=LEFT)
+        self.overlay_checkbox.config(state=DISABLED)  # Initially disabled until segmentation runs
+        
         # Create scrollable frame for segmentation results
-        self.seg_canvas = ttk.Canvas(seg_results_frame, height=200)
+        self.seg_canvas = ttk.Canvas(seg_results_frame)
         seg_scrollbar = ttk.Scrollbar(seg_results_frame, orient=VERTICAL, command=self.seg_canvas.yview)
         self.seg_results_frame_inner = ttk.Frame(self.seg_canvas)
         
@@ -128,17 +152,34 @@ class MainWindow:
         
         # Enable ML button when image is loaded
         self.ml_btn.config(state=NORMAL)
+    
+    def _toggle_overlay(self):
+        """Toggle between original image and segmented overlay."""
+        if self.show_overlay_var.get():
+            self.display_mode = "segmented"
+        else:
+            self.display_mode = "original"
+        self._display_image()
         
     def _display_image(self):
         """Display the current image in the image label."""
         if self.current_image is None:
             return
-            
-        # Calculate scaling to fit display area
-        display_width = config.MAX_DISPLAY_WIDTH
-        display_height = config.MAX_DISPLAY_HEIGHT
         
-        img_width, img_height = self.current_image.size
+        # Determine which image to display
+        if self.display_mode == "segmented" and self.segmented_mask is not None:
+            # Display segmented overlay
+            image_to_display = self.segmentation_model.overlay_mask(self.current_image, self.segmented_mask, alpha=0.6)
+        else:
+            # Display original image
+            image_to_display = self.current_image
+        
+        # Get actual available space for image display
+        self.image_label.update_idletasks()
+        display_width = max(self.image_label.winfo_width() - 20, 400)  # Leave some padding
+        display_height = max(self.image_label.winfo_height() - 20, 400)
+        
+        img_width, img_height = image_to_display.size
         width_ratio = display_width / img_width
         height_ratio = display_height / img_height
         scale_ratio = min(width_ratio, height_ratio, 1.0)
@@ -147,7 +188,7 @@ class MainWindow:
         new_height = int(img_height * scale_ratio)
         
         # Resize image
-        display_image = self.current_image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+        display_image = image_to_display.resize((new_width, new_height), Image.Resampling.LANCZOS)
         
         # Convert to PhotoImage
         self.photo_image = ImageTk.PhotoImage(display_image)
@@ -202,9 +243,13 @@ class MainWindow:
             color_canvas = ttk.Canvas(result_frame, width=20, height=20)
             color_canvas.pack(side=LEFT, padx=(0, 10))
             
-            # Convert RGB tuple to hex color
-            color_hex = '#{:02x}{:02x}{:02x}'.format(*stat['color'])
-            color_canvas.create_rectangle(0, 0, 20, 20, fill=color_hex, outline="black")
+            # Use actual color if percentage >= 0.1%, otherwise show empty black box
+            if stat['percentage'] >= 0.1:
+                color_hex = '#{:02x}{:02x}{:02x}'.format(*stat['color'])
+                color_canvas.create_rectangle(0, 0, 20, 20, fill=color_hex, outline="black")
+            else:
+                # Empty box with just black outline for classes not detected
+                color_canvas.create_rectangle(0, 0, 20, 20, fill="", outline="black")
             
             # Class name and percentage
             label_text = f"{stat['name']}: {stat['percentage']:.1f}%"
@@ -267,12 +312,14 @@ class MainWindow:
             # Step 4: Display results
             self.root.after(0, lambda: self.status_bar.config(text="Step 4: Displaying results..."))
             
-            overlay_image = self.segmentation_model.overlay_mask(self.current_image, mask, alpha=0.6)
+            # Switch to segmented display mode
+            self.display_mode = "segmented"
             
             # Update display on main thread
-            self.root.after(0, lambda: self._display_segmented_image(overlay_image))
+            self.root.after(0, lambda: self._display_image())
             self.root.after(0, lambda: self._display_segmentation_results(stats))
             self.root.after(0, lambda: self.ml_btn.config(state=NORMAL))
+            self.root.after(0, lambda: self.overlay_checkbox.config(state=NORMAL))
             self.root.after(0, lambda: self.status_bar.config(text="Segmentation complete!"))
             
         except Exception as e:
@@ -281,26 +328,14 @@ class MainWindow:
             self.root.after(0, lambda: self.ml_btn.config(state=NORMAL))
             self.root.after(0, lambda: self.status_bar.config(text="Ready"))
     
-    def _display_segmented_image(self, image: Image.Image):
-        """Display the segmented image."""
-        # Calculate scaling to fit display area
-        display_width = config.MAX_DISPLAY_WIDTH
-        display_height = config.MAX_DISPLAY_HEIGHT
-        
-        img_width, img_height = image.size
-        width_ratio = display_width / img_width
-        height_ratio = display_height / img_height
-        scale_ratio = min(width_ratio, height_ratio, 1.0)
-        
-        new_width = int(img_width * scale_ratio)
-        new_height = int(img_height * scale_ratio)
-        
-        # Resize image
-        display_image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
-        
-        # Convert to PhotoImage
-        self.photo_image = ImageTk.PhotoImage(display_image)
-        self.image_label.config(image=self.photo_image, text="")
+    def _on_window_resize(self, event):
+        """Handle window resize events to update image display."""
+        # Only respond to resize events from the root window
+        if event.widget == self.root and self.current_image is not None:
+            # Use after to debounce resize events
+            if hasattr(self, '_resize_id'):
+                self.root.after_cancel(self._resize_id)
+            self._resize_id = self.root.after(100, self._display_image)
         
     def run(self):
         """Start the application main loop."""

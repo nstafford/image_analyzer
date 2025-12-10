@@ -64,7 +64,19 @@ class SegmentationModel:
             self.model = self.model.to(self.device)
             
             success_msg = f"Model loaded successfully to {self.device}\n"
-            success_msg += f"Using: {self.system_info['gpu_name'] if self.system_info['gpu_available'] else 'CPU'}"
+            
+            # Determine what hardware is being used
+            if self.device.type == 'cuda':
+                success_msg += f"Using: {self.system_info['gpu_name']} (CUDA)"
+            elif self.device.type == 'mps':
+                success_msg += f"Using: {self.system_info['gpu_name']} (Metal Performance Shaders)"
+            else:
+                # CPU mode
+                if self.system_info['gpu_available']:
+                    # GPU detected but not used
+                    success_msg += f"Using: CPU (GPU detected: {self.system_info['gpu_name']}, but no CUDA support)"
+                else:
+                    success_msg += "Using: CPU (No GPU detected)"
             
             print("Model loading complete!")
             return True, success_msg
@@ -230,20 +242,18 @@ class SegmentationModel:
         palette = self._get_pascal_palette()
         
         stats = []
-        unique_classes = np.unique(mask)
         
-        for class_id in unique_classes:
+        # Show all 21 classes with their percentages
+        for class_id in range(len(class_names)):
             class_pixels = np.sum(mask == class_id)
             percentage = (class_pixels / total_pixels) * 100
             
-            # Only include classes with > 0.1% coverage
-            if percentage > 0.1:
-                stats.append({
-                    'class_id': int(class_id),
-                    'name': class_names[class_id] if class_id < len(class_names) else f"Class {class_id}",
-                    'color': tuple(palette[class_id]) if class_id < len(palette) else (128, 128, 128),
-                    'percentage': percentage
-                })
+            stats.append({
+                'class_id': int(class_id),
+                'name': class_names[class_id],
+                'color': tuple(palette[class_id]) if class_id < len(palette) else (128, 128, 128),
+                'percentage': percentage
+            })
         
         # Sort by percentage descending
         stats.sort(key=lambda x: x['percentage'], reverse=True)
