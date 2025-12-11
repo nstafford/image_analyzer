@@ -10,6 +10,7 @@ import threading
 import config
 from utils.image_loader import load_image, validate_image_format
 from utils.metrics import extract_image_metrics
+from utils.system_checker import get_system_info, format_system_info
 from models.segmentation import SegmentationModel
 
 
@@ -23,7 +24,7 @@ class MainWindow:
         self.root.geometry(f"{config.APP_WIDTH}x{config.APP_HEIGHT}")
         
         # Set minimum window size to prevent UI from breaking
-        self.root.minsize(800, 600)
+        self.root.minsize(config.APP_MIN_WIDTH, config.APP_MIN_HEIGHT)
         
         self.current_image: Optional[Image.Image] = None
         self.current_filepath: str = ""
@@ -31,8 +32,12 @@ class MainWindow:
         self.segmentation_model: Optional[SegmentationModel] = None
         self.segmented_mask = None
         self.display_mode: str = "original"  # "original" or "segmented"
+        self.model_loaded: bool = False
+        self.loaded_model_name: str = ""
+        self.system_info = None
         
         self._create_widgets()
+        self._check_system_on_startup()
         
         # Bind window resize event to update image display
         self.root.bind('<Configure>', self._on_window_resize)
@@ -51,14 +56,29 @@ class MainWindow:
         )
         load_btn.pack(side=LEFT, padx=5)
         
-        self.ml_btn = ttk.Button(
+        self.load_model_btn = ttk.Button(
             toolbar,
-            text="Run ML Segmentation",
+            text="Load ML Model",
+            bootstyle=INFO,
+            command=self.load_ml_model
+        )
+        self.load_model_btn.pack(side=LEFT, padx=5)
+        
+        self.loaded_model_label = ttk.Label(
+            toolbar,
+            text="No model loaded",
+            bootstyle=SECONDARY
+        )
+        self.loaded_model_label.pack(side=LEFT, padx=5)
+        
+        self.apply_model_btn = ttk.Button(
+            toolbar,
+            text="Apply Model to Image",
             bootstyle=SUCCESS,
-            command=self.run_ml_segmentation,
+            command=self.apply_model_to_image,
             state=DISABLED
         )
-        self.ml_btn.pack(side=LEFT, padx=5)
+        self.apply_model_btn.pack(side=LEFT, padx=5)
         
         # Main content area
         content = ttk.Frame(self.root)
@@ -80,6 +100,14 @@ class MainWindow:
         self.metrics_text = ttk.Text(right_panel, width=35, height=8, wrap=WORD)
         self.metrics_text.pack(fill=X, pady=(0, 10))
         self.metrics_text.config(state=DISABLED)
+        
+        # System info panel
+        system_info_frame = ttk.Labelframe(right_panel, text="System Information", padding=10)
+        system_info_frame.pack(fill=X, pady=(0, 10))
+        
+        self.system_info_text = ttk.Text(system_info_frame, width=35, height=6, wrap=WORD)
+        self.system_info_text.pack(fill=X)
+        self.system_info_text.config(state=DISABLED)
         
         # Segmentation results panel
         seg_results_frame = ttk.Labelframe(right_panel, text="Segmentation Results", padding=10)
@@ -146,12 +174,23 @@ class MainWindow:
         self.current_image = image
         self.current_filepath = filepath
         
+        # Reset segmentation state for new image
+        self.segmented_mask = None
+        self.display_mode = "original"
+        self.show_overlay_var.set(True)
+        self.overlay_checkbox.config(state=DISABLED)
+        
+        # Clear segmentation results
+        for widget in self.seg_results_frame_inner.winfo_children():
+            widget.destroy()
+        
         self._display_image()
         self._display_metrics()
         self.status_bar.config(text=f"Loaded: {filepath}")
         
-        # Enable ML button when image is loaded
-        self.ml_btn.config(state=NORMAL)
+        # Enable Apply Model button if model is loaded
+        if self.model_loaded:
+            self.apply_model_btn.config(state=NORMAL)
     
     def _toggle_overlay(self):
         """Toggle between original image and segmented overlay."""
@@ -256,61 +295,168 @@ class MainWindow:
             result_label = ttk.Label(result_frame, text=label_text)
             result_label.pack(side=LEFT, fill=X, expand=True)
     
-    def run_ml_segmentation(self):
-        """Run ML segmentation on the current image."""
+    def _check_system_on_startup(self):
+        """Check system capabilities at startup and display info in background thread."""
+        # Show loading message immediately
+        self.system_info_text.config(state=NORMAL)
+        self.system_info_text.delete(1.0, END)
+        self.system_info_text.insert(1.0, "Checking system capabilities...")
+        self.system_info_text.config(state=DISABLED)
+        
+        def check_thread():
+            try:
+                self.system_info = get_system_info()
+                formatted_info = format_system_info(self.system_info)
+                
+                self.root.after(0, lambda: self.system_info_text.config(state=NORMAL))
+                self.root.after(0, lambda: self.system_info_text.delete(1.0, END))
+                self.root.after(0, lambda: self.system_info_text.insert(1.0, formatted_info))
+                self.root.after(0, lambda: self.system_info_text.config(state=DISABLED))
+                self.root.after(0, lambda: self.status_bar.config(text="System check complete"))
+            except Exception as e:
+                error_msg = f"Error checking system: {str(e)}"
+                self.root.after(0, lambda: self.system_info_text.config(state=NORMAL))
+                self.root.after(0, lambda: self.system_info_text.delete(1.0, END))
+                self.root.after(0, lambda: self.system_info_text.insert(1.0, error_msg))
+                self.root.after(0, lambda: self.system_info_text.config(state=DISABLED))
+        
+        threading.Thread(target=check_thread, daemon=True).start()
+    
+    def load_ml_model(self):
+        """Show model selection dialog and load chosen model."""
+        # For now, only one model available
+        available_models = [
+            {"name": "DeepLabV3 (MobileNetV3)", "id": "deeplabv3_mobilenet_v3"}
+        ]
+        
+        # Create simple selection dialog
+        dialog = ttk.Toplevel(self.root)
+        dialog.title("Select ML Model")
+        dialog.geometry("400x200")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        ttk.Label(
+            dialog,
+            text="Select a segmentation model to load:",
+            padding=10
+        ).pack()
+        
+        selected_model = ttk.StringVar(value=available_models[0]["id"])
+        
+        for model in available_models:
+            ttk.Radiobutton(
+                dialog,
+                text=model["name"],
+                variable=selected_model,
+                value=model["id"]
+            ).pack(anchor=W, padx=20, pady=5)
+        
+        def on_load():
+            model_id = selected_model.get()
+            dialog.destroy()
+            self._load_model_thread(model_id)
+        
+        button_frame = ttk.Frame(dialog)
+        button_frame.pack(side=BOTTOM, pady=10)
+        
+        ttk.Button(
+            button_frame,
+            text="Load Model",
+            bootstyle=SUCCESS,
+            command=on_load
+        ).pack(side=LEFT, padx=5)
+        
+        ttk.Button(
+            button_frame,
+            text="Cancel",
+            bootstyle=SECONDARY,
+            command=dialog.destroy
+        ).pack(side=LEFT, padx=5)
+    
+    def _load_model_thread(self, model_id: str):
+        """Load the selected model in a background thread."""
+        self.load_model_btn.config(state=DISABLED)
+        self.status_bar.config(text="Loading ML model...")
+        
+        def load_thread():
+            try:
+                self.segmentation_model = SegmentationModel()
+                success, message = self.segmentation_model.load_model()
+                
+                if success:
+                    self.model_loaded = True
+                    # Get model name from ID
+                    if model_id == "deeplabv3_mobilenet_v3":
+                        self.loaded_model_name = "DeepLabV3"
+                    
+                    self.root.after(0, lambda: self.loaded_model_label.config(
+                        text=f"Loaded: {self.loaded_model_name}",
+                        bootstyle=SUCCESS
+                    ))
+                    self.root.after(0, lambda: messagebox.showinfo("Model Loaded", message))
+                    self.root.after(0, lambda: self.status_bar.config(text=f"Model loaded: {self.loaded_model_name}"))
+                    
+                    # Enable Apply Model button if image is loaded
+                    if self.current_image is not None:
+                        self.root.after(0, lambda: self.apply_model_btn.config(state=NORMAL))
+                else:
+                    self.root.after(0, lambda: messagebox.showerror("Model Load Failed", message))
+                    self.root.after(0, lambda: self.status_bar.config(text="Ready"))
+                
+                self.root.after(0, lambda: self.load_model_btn.config(state=NORMAL))
+                
+            except Exception as e:
+                error_msg = f"Error loading model: {str(e)}"
+                self.root.after(0, lambda: messagebox.showerror("Error", error_msg))
+                self.root.after(0, lambda: self.load_model_btn.config(state=NORMAL))
+                self.root.after(0, lambda: self.status_bar.config(text="Ready"))
+        
+        threading.Thread(target=load_thread, daemon=True).start()
+    
+    def apply_model_to_image(self):
+        """Apply the loaded model to the current image."""
         if self.current_image is None:
             messagebox.showwarning("No Image", "Please load an image first")
             return
         
+        if not self.model_loaded:
+            messagebox.showwarning("No Model", "Please load a model first")
+            return
+        
         # Disable button during processing
-        self.ml_btn.config(state=DISABLED)
-        self.status_bar.config(text="Initializing ML model...")
+        self.apply_model_btn.config(state=DISABLED)
+        self.status_bar.config(text="Applying model to image...")
         
         # Run in separate thread to avoid freezing UI
-        thread = threading.Thread(target=self._run_segmentation_thread, daemon=True)
+        thread = threading.Thread(target=self._apply_model_thread, daemon=True)
         thread.start()
     
-    def _run_segmentation_thread(self):
-        """Thread function to run segmentation."""
+    def _apply_model_thread(self):
+        """Thread function to apply model to image."""
+    def _apply_model_thread(self):
+        """Thread function to apply model to image."""
         try:
-            # Step 1: Check system and load model
-            if self.segmentation_model is None:
-                self.segmentation_model = SegmentationModel()
-            
-            # Update UI - using after to run on main thread
-            self.root.after(0, lambda: self.status_bar.config(text="Step 1: Checking system capabilities..."))
-            
-            success, message = self.segmentation_model.load_model()
-            
-            if not success:
-                self.root.after(0, lambda: messagebox.showerror("Model Load Failed", message))
-                self.root.after(0, lambda: self.ml_btn.config(state=NORMAL))
-                self.root.after(0, lambda: self.status_bar.config(text="Ready"))
-                return
-            
-            # Show system info
-            self.root.after(0, lambda: messagebox.showinfo("System Check Complete", message))
-            
-            # Step 2: Run segmentation
-            self.root.after(0, lambda: self.status_bar.config(text="Step 2: Running segmentation..."))
+            # Run segmentation
+            self.root.after(0, lambda: self.status_bar.config(text="Running segmentation..."))
             
             mask = self.segmentation_model.segment_image(self.current_image)
             
             if mask is None:
                 self.root.after(0, lambda: messagebox.showerror("Segmentation Failed", "Failed to segment image"))
-                self.root.after(0, lambda: self.ml_btn.config(state=NORMAL))
+                self.root.after(0, lambda: self.apply_model_btn.config(state=NORMAL))
                 self.root.after(0, lambda: self.status_bar.config(text="Ready"))
                 return
             
             self.segmented_mask = mask
             
-            # Step 3: Calculate statistics
-            self.root.after(0, lambda: self.status_bar.config(text="Step 3: Calculating statistics..."))
+            # Calculate statistics
+            self.root.after(0, lambda: self.status_bar.config(text="Calculating statistics..."))
             
             stats = self.segmentation_model.get_segmentation_stats(mask)
             
-            # Step 4: Display results
-            self.root.after(0, lambda: self.status_bar.config(text="Step 4: Displaying results..."))
+            # Display results
+            self.root.after(0, lambda: self.status_bar.config(text="Displaying results..."))
             
             # Switch to segmented display mode
             self.display_mode = "segmented"
@@ -318,14 +464,14 @@ class MainWindow:
             # Update display on main thread
             self.root.after(0, lambda: self._display_image())
             self.root.after(0, lambda: self._display_segmentation_results(stats))
-            self.root.after(0, lambda: self.ml_btn.config(state=NORMAL))
+            self.root.after(0, lambda: self.apply_model_btn.config(state=NORMAL))
             self.root.after(0, lambda: self.overlay_checkbox.config(state=NORMAL))
             self.root.after(0, lambda: self.status_bar.config(text="Segmentation complete!"))
             
         except Exception as e:
             error_msg = f"Error during segmentation: {str(e)}"
             self.root.after(0, lambda: messagebox.showerror("Error", error_msg))
-            self.root.after(0, lambda: self.ml_btn.config(state=NORMAL))
+            self.root.after(0, lambda: self.apply_model_btn.config(state=NORMAL))
             self.root.after(0, lambda: self.status_bar.config(text="Ready"))
     
     def _on_window_resize(self, event):

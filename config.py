@@ -4,6 +4,8 @@
 APP_TITLE = "Image Analyzer"
 APP_WIDTH = 1200
 APP_HEIGHT = 800
+APP_MIN_WIDTH = 800
+APP_MIN_HEIGHT = 600
 THEME = "darkly"
 
 # Supported image formats
