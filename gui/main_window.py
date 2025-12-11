@@ -97,7 +97,7 @@ class MainWindow:
         right_panel.pack_propagate(False)  # Prevent shrinking below minimum
         right_panel.config(width=320)  # Fixed minimum width for readability
         
-        self.metrics_text = ttk.Text(right_panel, width=35, height=8, wrap=WORD)
+        self.metrics_text = ttk.Text(right_panel, width=35, height=6, wrap=WORD)
         self.metrics_text.pack(fill=X, pady=(0, 10))
         self.metrics_text.config(state=DISABLED)
         
@@ -108,6 +108,16 @@ class MainWindow:
         self.system_info_text = ttk.Text(system_info_frame, width=35, height=6, wrap=WORD)
         self.system_info_text.pack(fill=X)
         self.system_info_text.config(state=DISABLED)
+        
+        # Model info panel
+        model_info_frame = ttk.Labelframe(right_panel, text="Model Information", padding=10)
+        model_info_frame.pack(fill=X, pady=(0, 10))
+        
+        self.model_info_text = ttk.Text(model_info_frame, width=35, height=5, wrap=WORD)
+        self.model_info_text.pack(fill=X)
+        self.model_info_text.config(state=NORMAL)
+        self.model_info_text.insert(1.0, "None")
+        self.model_info_text.config(state=DISABLED)
         
         # Segmentation results panel
         seg_results_frame = ttk.Labelframe(right_panel, text="Segmentation Results", padding=10)
@@ -295,6 +305,30 @@ class MainWindow:
             result_label = ttk.Label(result_frame, text=label_text)
             result_label.pack(side=LEFT, fill=X, expand=True)
     
+    def _display_model_info(self):
+        """Display model information in the model info panel."""
+        if self.segmentation_model is None or not self.model_loaded:
+            # Show "None" when no model is loaded
+            self.model_info_text.config(state=NORMAL)
+            self.model_info_text.delete(1.0, END)
+            self.model_info_text.insert(1.0, "None")
+            self.model_info_text.config(state=DISABLED)
+            return
+        
+        model_info = self.segmentation_model.get_model_info()
+        
+        # Format model info for display
+        info_text = f"Model: {model_info['name']}\n"
+        info_text += f"Parameters: {model_info['num_parameters']:,}\n"
+        info_text += f"Size: {model_info['size_mb']:.2f} MB\n"
+        info_text += f"Weights: {model_info['weights']}\n"
+        info_text += f"Device: {model_info['device']}\n"
+        
+        self.model_info_text.config(state=NORMAL)
+        self.model_info_text.delete(1.0, END)
+        self.model_info_text.insert(1.0, info_text)
+        self.model_info_text.config(state=DISABLED)
+    
     def _check_system_on_startup(self):
         """Check system capabilities at startup and display info in background thread."""
         # Show loading message immediately
@@ -394,7 +428,8 @@ class MainWindow:
                         text=f"Loaded: {self.loaded_model_name}",
                         bootstyle=SUCCESS
                     ))
-                    self.root.after(0, lambda: messagebox.showinfo("Model Loaded", message))
+                    self.root.after(0, lambda: self._display_model_info())
+                    # self.root.after(0, lambda: messagebox.showinfo("Model Loaded", message))
                     self.root.after(0, lambda: self.status_bar.config(text=f"Model loaded: {self.loaded_model_name}"))
                     
                     # Enable Apply Model button if image is loaded

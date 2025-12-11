@@ -18,6 +18,10 @@ class SegmentationModel:
         self.model = None
         self.device = None
         self.system_info = None
+        self.model_name = "DeepLabV3 (MobileNetV3-Large)"
+        self.weights_source = "DEFAULT"
+        self.num_parameters = 0
+        self.model_size_mb = 0.0
         self.transform = transforms.Compose([
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
@@ -63,6 +67,10 @@ class SegmentationModel:
             # Step 4: Move model to device
             self.model = self.model.to(self.device)
             
+            # Step 5: Calculate model statistics
+            self.num_parameters = sum(p.numel() for p in self.model.parameters())
+            self.model_size_mb = sum(p.numel() * p.element_size() for p in self.model.parameters()) / (1024 * 1024)
+            
             success_msg = f"Model loaded successfully to {self.device}\n"
             
             # Determine what hardware is being used
@@ -85,6 +93,21 @@ class SegmentationModel:
             error_msg = f"Failed to load model: {str(e)}"
             print(error_msg)
             return False, error_msg
+    
+    def get_model_info(self) -> dict:
+        """
+        Get model information.
+        
+        Returns:
+            Dictionary with model details
+        """
+        return {
+            'name': self.model_name,
+            'num_parameters': self.num_parameters,
+            'size_mb': self.model_size_mb,
+            'weights': self.weights_source,
+            'device': str(self.device) if self.device else 'Not loaded'
+        }
     
     def segment_image(self, image: Image.Image) -> Optional[np.ndarray]:
         """
