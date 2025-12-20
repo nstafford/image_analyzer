@@ -5,23 +5,37 @@ import numpy as np
 from PIL import Image
 import torch
 import torchvision.transforms as transforms
-from torchvision.models.segmentation import deeplabv3_mobilenet_v3_large
 
 from utils.system_checker import get_system_info
+from models.model_registry import ModelRegistry, ModelConfig
 
 
 class SegmentationModel:
     """Wrapper for segmentation model with automatic device selection."""
     
-    def __init__(self):
-        """Initialize the segmentation model."""
+    def __init__(self, model_config: Optional[ModelConfig] = None):
+        """Initialize the segmentation model.
+        
+        Args:
+            model_config: Configuration for the model to load. If None, uses default DeepLabV3.
+        """
         self.model = None
         self.device = None
         self.system_info = None
-        self.model_name = "DeepLabV3 (MobileNetV3-Large)"
-        self.weights_source = "DEFAULT"
+        
+        # Use provided config or default to PASCAL VOC DeepLabV3
+        if model_config is None:
+            model_config = ModelRegistry.get_model_by_id("deeplabv3_pascal")
+        
+        self.model_config = model_config
+        self.model_name = model_config.display_name
+        self.weights_source = model_config.weights_source
+        self.num_classes = model_config.num_classes
+        self.class_names = model_config.class_names
+        self.color_palette = model_config.color_palette
         self.num_parameters = 0
         self.model_size_mb = 0.0
+        
         self.transform = transforms.Compose([
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
@@ -60,8 +74,21 @@ class SegmentationModel:
             
             print(f"Step 2: Loading model to {self.device}...")
             
-            # Step 3: Load pre-trained model
-            self.model = deeplabv3_mobilenet_v3_large(weights='DEFAULT')
+            # Step 3: Load model using config's loader
+            if self.model_config.model_loader is None:
+                return False, "Model loader not configured"
+            
+            # For custom weights, pass the path to the loader
+            if self.weights_source in ["CUSTOM", "BUNDLED"] and self.model_config.custom_weights_path:
+                print(f"Loading model with weights from {self.model_config.custom_weights_path}...")
+                self.model = self.model_config.model_loader(self.model_config.custom_weights_path)
+            else:
+                # Default weights or no weights
+                self.model = self.model_config.model_loader()
+            
+            if self.model is None:
+                return False, "Model loader returned None"
+            
             self.model.eval()
             
             # Step 4: Move model to device
@@ -136,8 +163,14 @@ class SegmentationModel:
             with torch.no_grad():
                 output = self.model(input_batch)['out'][0]
             
-            # Get predicted class for each pixel
-            output_predictions = output.argmax(0).cpu().numpy()
+            # Handle different output formats based on number of classes
+            if self.num_classes == 1:
+                # Single channel output (binary segmentation with sigmoid)
+                # Apply sigmoid and threshold at 0.5
+                output_predictions = (torch.sigmoid(output[0]) > 0.5).cpu().numpy().astype(np.uint8)
+            else:
+                # Multi-class output (use argmax)
+                output_predictions = output.argmax(0).cpu().numpy()
             
             return output_predictions
             
@@ -150,19 +183,26 @@ class SegmentationModel:
         Create a colored visualization of the segmentation mask.
         
         Args:
-            mask: Segmentation mask array
+            mask: Segmentation mask array (0=background, 1=foreground for binary)
             
         Returns:
             PIL Image with colored mask
         """
-        # Create color palette (21 classes for COCO)
-        palette = self._get_pascal_palette()
+        # Get color palette for current model
+        palette = self._get_palette()
         
         # Create RGB image
         colored_mask = np.zeros((mask.shape[0], mask.shape[1], 3), dtype=np.uint8)
         
-        for class_id in range(21):
-            colored_mask[mask == class_id] = palette[class_id]
+        # For single class models, mask is binary (0 or 1)
+        # Apply color only to foreground (value=1)
+        if self.num_classes == 1:
+            # Background stays black (0,0,0), foreground gets the color
+            colored_mask[mask == 1] = palette[0]
+        else:
+            # Multi-class: color each class
+            for class_id in range(self.num_classes):
+                colored_mask[mask == class_id] = palette[class_id]
         
         return Image.fromarray(colored_mask)
     
@@ -195,60 +235,13 @@ class SegmentationModel:
         
         return blended.convert('RGB')
     
-    @staticmethod
-    def _get_pascal_palette():
-        """Get color palette for PASCAL VOC classes."""
-        palette = [
-            [0, 0, 0],       # background
-            [128, 0, 0],     # aeroplane
-            [0, 128, 0],     # bicycle
-            [128, 128, 0],   # bird
-            [0, 0, 128],     # boat
-            [128, 0, 128],   # bottle
-            [0, 128, 128],   # bus
-            [128, 128, 128], # car
-            [64, 0, 0],      # cat
-            [192, 0, 0],     # chair
-            [64, 128, 0],    # cow
-            [192, 128, 0],   # dining table
-            [64, 0, 128],    # dog
-            [192, 0, 128],   # horse
-            [64, 128, 128],  # motorbike
-            [192, 128, 128], # person
-            [0, 64, 0],      # potted plant
-            [128, 64, 0],    # sheep
-            [0, 192, 0],     # sofa
-            [128, 192, 0],   # train
-            [0, 64, 128]     # tv/monitor
-        ]
-        return palette
+    def _get_palette(self):
+        """Get color palette for the current model."""
+        return self.color_palette
     
-    @staticmethod
-    def get_class_names():
-        """Get class names for PASCAL VOC dataset."""
-        return [
-            "background",
-            "aeroplane",
-            "bicycle",
-            "bird",
-            "boat",
-            "bottle",
-            "bus",
-            "car",
-            "cat",
-            "chair",
-            "cow",
-            "dining table",
-            "dog",
-            "horse",
-            "motorbike",
-            "person",
-            "potted plant",
-            "sheep",
-            "sofa",
-            "train",
-            "tv/monitor"
-        ]
+    def get_class_names(self):
+        """Get class names for the current model."""
+        return self.class_names
     
     def get_segmentation_stats(self, mask: np.ndarray) -> list:
         """
@@ -262,21 +255,43 @@ class SegmentationModel:
         """
         total_pixels = mask.size
         class_names = self.get_class_names()
-        palette = self._get_pascal_palette()
+        palette = self._get_palette()
         
         stats = []
         
-        # Show all 21 classes with their percentages
-        for class_id in range(len(class_names)):
-            class_pixels = np.sum(mask == class_id)
-            percentage = (class_pixels / total_pixels) * 100
-            
+        # For single-class models, show background and foreground
+        if self.num_classes == 1:
+            # Background (0)
+            bg_pixels = np.sum(mask == 0)
+            bg_percentage = (bg_pixels / total_pixels) * 100
             stats.append({
-                'class_id': int(class_id),
-                'name': class_names[class_id],
-                'color': tuple(palette[class_id]) if class_id < len(palette) else (128, 128, 128),
-                'percentage': percentage
+                'class_id': 0,
+                'name': 'background',
+                'color': (0, 0, 0),
+                'percentage': bg_percentage
             })
+            
+            # Foreground (1) - the actual class
+            fg_pixels = np.sum(mask == 1)
+            fg_percentage = (fg_pixels / total_pixels) * 100
+            stats.append({
+                'class_id': 1,
+                'name': class_names[0],
+                'color': tuple(palette[0]),
+                'percentage': fg_percentage
+            })
+        else:
+            # Multi-class: show all classes with their percentages
+            for class_id in range(self.num_classes):
+                class_pixels = np.sum(mask == class_id)
+                percentage = (class_pixels / total_pixels) * 100
+                
+                stats.append({
+                    'class_id': int(class_id),
+                    'name': class_names[class_id],
+                    'color': tuple(palette[class_id]) if class_id < len(palette) else (128, 128, 128),
+                    'percentage': percentage
+                })
         
         # Sort by percentage descending
         stats.sort(key=lambda x: x['percentage'], reverse=True)

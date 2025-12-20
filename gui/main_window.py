@@ -12,6 +12,7 @@ from utils.image_loader import load_image, validate_image_format
 from utils.metrics import extract_image_metrics
 from utils.system_checker import get_system_info, format_system_info
 from models.segmentation import SegmentationModel
+from models.model_registry import ModelRegistry, ModelConfig
 
 
 class MainWindow:
@@ -358,38 +359,63 @@ class MainWindow:
     
     def load_ml_model(self):
         """Show model selection dialog and load chosen model."""
-        # For now, only one model available
-        available_models = [
-            {"name": "DeepLabV3 (MobileNetV3)", "id": "deeplabv3_mobilenet_v3"}
-        ]
+        # Get available models from registry
+        model_options = ModelRegistry.get_model_display_names()
         
-        # Create simple selection dialog
+        # Create model selection dialog
         dialog = ttk.Toplevel(self.root)
         dialog.title("Select ML Model")
-        dialog.geometry("400x200")
+        dialog.geometry("500x350")
         dialog.transient(self.root)
         dialog.grab_set()
         
         ttk.Label(
             dialog,
             text="Select a segmentation model to load:",
-            padding=10
+            padding=10,
+            font=('Segoe UI', 10, 'bold')
         ).pack()
         
-        selected_model = ttk.StringVar(value=available_models[0]["id"])
+        # Model selection
+        selected_model_id = ttk.StringVar(value=model_options[0][0])
         
-        for model in available_models:
+        # Initialize widgets that will be referenced in callbacks
+        weights_path_var = ttk.StringVar()
+        browse_btn = None  # Will be set later
+        
+        model_frame = ttk.Frame(dialog)
+        model_frame.pack(fill=BOTH, expand=True, padx=20, pady=10)
+        
+        for model_id, display_name in model_options:
             ttk.Radiobutton(
-                dialog,
-                text=model["name"],
-                variable=selected_model,
-                value=model["id"]
-            ).pack(anchor=W, padx=20, pady=5)
+                model_frame,
+                text=display_name,
+                variable=selected_model_id,
+                value=model_id,
+                command=lambda mid=model_id: self._on_model_selected(mid, weights_path_var, browse_btn)
+            ).pack(anchor=W, pady=5)
         
+        # Custom weights section (initially hidden)
+        weights_frame = ttk.Labelframe(dialog, text="Custom Weights (Optional)", padding=10)
+        weights_frame.pack(fill=X, padx=20, pady=(0, 10))
+        
+        weights_entry = ttk.Entry(weights_frame, textvariable=weights_path_var, state=DISABLED)
+        weights_entry.pack(side=LEFT, fill=X, expand=True, padx=(0, 5))
+        
+        browse_btn = ttk.Button(
+            weights_frame,
+            text="Browse...",
+            command=lambda: self._browse_weights_file(weights_path_var),
+            state=DISABLED
+        )
+        browse_btn.pack(side=LEFT)
+        
+        # Load button
         def on_load():
-            model_id = selected_model.get()
+            model_id = selected_model_id.get()
+            weights_path = weights_path_var.get() if weights_path_var.get() else None
             dialog.destroy()
-            self._load_model_thread(model_id)
+            self._load_model_thread(model_id, weights_path)
         
         button_frame = ttk.Frame(dialog)
         button_frame.pack(side=BOTTOM, pady=10)
@@ -407,22 +433,58 @@ class MainWindow:
             bootstyle=SECONDARY,
             command=dialog.destroy
         ).pack(side=LEFT, padx=5)
+        
+        # Initialize weights controls based on default selection
+        self._on_model_selected(selected_model_id.get(), weights_path_var, browse_btn)
     
-    def _load_model_thread(self, model_id: str):
+    def _on_model_selected(self, model_id: str, weights_path_var, browse_btn):
+        """Handle model selection change to show/hide custom weights option."""
+        model_config = ModelRegistry.get_model_by_id(model_id)
+        
+        if model_config and model_config.weights_source == "CUSTOM":
+            # Enable custom weights input for this model
+            weights_path_var.set("")
+            browse_btn.config(state=NORMAL)
+        else:
+            # Disable for models with default weights
+            weights_path_var.set("")
+            browse_btn.config(state=DISABLED)
+    
+    def _browse_weights_file(self, weights_path_var):
+        """Open file dialog to select custom weights file."""
+        filepath = filedialog.askopenfilename(
+            title="Select Model Weights File",
+            filetypes=[("PyTorch Weights", "*.pth *.pt"), ("All Files", "*.*")]
+        )
+        if filepath:
+            weights_path_var.set(filepath)
+    
+    def _load_model_thread(self, model_id: str, weights_path: Optional[str] = None):
         """Load the selected model in a background thread."""
         self.load_model_btn.config(state=DISABLED)
         self.status_bar.config(text="Loading ML model...")
         
         def load_thread():
             try:
-                self.segmentation_model = SegmentationModel()
+                # Get model configuration
+                model_config = ModelRegistry.get_model_by_id(model_id)
+                if model_config is None:
+                    error_msg = f"Model not found: {model_id}"
+                    self.root.after(0, lambda: messagebox.showerror("Error", error_msg))
+                    self.root.after(0, lambda: self.load_model_btn.config(state=NORMAL))
+                    return
+                
+                # Set custom weights path if provided
+                if weights_path:
+                    model_config.custom_weights_path = weights_path
+                
+                # Create and load model
+                self.segmentation_model = SegmentationModel(model_config)
                 success, message = self.segmentation_model.load_model()
                 
                 if success:
                     self.model_loaded = True
-                    # Get model name from ID
-                    if model_id == "deeplabv3_mobilenet_v3":
-                        self.loaded_model_name = "DeepLabV3"
+                    self.loaded_model_name = model_config.name
                     
                     self.root.after(0, lambda: self.loaded_model_label.config(
                         text=f"Loaded: {self.loaded_model_name}",
