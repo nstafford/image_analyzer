@@ -4,7 +4,7 @@ A Python-based image analysis application with ML segmentation capabilities. Loa
 
 ## Features
 
-- **Modern UI**: Built with tkinter and ttkbootstrap for a sleek, themed dark interface
+- **~~Modern~~ Open source UI**: Built with tkinter and ttkbootstrap for a sleek, themed dark interface
 - **Multi-format Support**: Load JPEG, PNG, BMP, TIFF, GIF, WebP images
 - **Image Metrics**: Display resolution, channels, color space, bit depth, format, and file size
 - **System Information**: Real-time display of RAM, GPU, and VRAM availability
